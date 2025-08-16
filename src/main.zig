@@ -1,10 +1,11 @@
 const std = @import("std");
 const StringTable = @import("StringTable.zig");
 const Tokenizer = @import("Tokenizer.zig");
+const Parser = @import("Parser.zig");
 
 var debug_allocator: std.heap.DebugAllocator(.{ .enable_memory_limit = true }) = .init;
 pub fn main() !void {
-    const gpa, _ = gpa: {
+    var gpa, _ = gpa: {
         break :gpa switch (@import("builtin").mode) {
             .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
             .ReleaseFast, .ReleaseSmall => .{ std.heap.smp_allocator, false },
@@ -21,35 +22,34 @@ pub fn main() !void {
     defer it.close();
     var string_table = StringTable.init(gpa);
 
-    const tokens = try Tokenizer.tokenize(" a int long class\x00", &string_table, gpa);
-    for (tokens.items) |t| {
-        std.debug.print("\n{s}", .{@tagName(t.type)});
-    }
-    //var walker = try it.walk(gpa);
-    //while (walker.next() catch @panic("Error walking")) |entry| {
-    //    if (entry.kind == .file and
-    //        entry.basename.len > 5 and
-    //        std.mem.eql(u8, ".java", entry.basename[entry.basename.len - 5 ..]))
-    //    {
-    //        const source_file = entry.dir.openFile(entry.basename, .{}) catch |err| switch (err) {
-    //            error.FileTooBig => continue,
-    //            error.AccessDenied => continue,
-    //            error.SymLinkLoop => continue,
-    //            error.NoSpaceLeft => unreachable, //Indexing takes no disk space
-    //            error.IsDir => unreachable,
-    //            error.Unexpected => unreachable,
-    //            else => unreachable,
-    //        };
-    //        defer source_file.close();
-    //        const buf = source_file.readToEndAlloc(gpa, 100000000) catch @panic("Panic!");
-    //        const tokens = try Tokenizer.tokenize(buf, &string_table, gpa);
-    //        for (tokens.items) |t| {
-    //            std.debug.print("{s} ", .{@tagName(t.type)});
-    //        }
-    //        //try split_tokenize(buf, &string_table);
-    //        defer gpa.free(buf);
-    //    }
+    //const tokens = try Tokenizer.tokenize(" a int long class\x00", &string_table, gpa);
+    //for (tokens.items) |t| {
+    //    std.debug.print("\n{s}", .{@tagName(t.type)});
     //}
+    var walker = try it.walk(gpa);
+    var buf = try gpa.alloc(u8, mb(10));
+    defer gpa.free(buf);
+
+    while (walker.next() catch @panic("Error walking")) |entry| {
+        if (entry.kind == .file and
+            entry.basename.len > 5 and
+            std.mem.eql(u8, ".java", entry.basename[entry.basename.len - 5 ..]))
+        {
+            const source_file = try entry.dir.openFile(entry.basename, .{});
+            defer source_file.close();
+
+            const bytes_read = source_file.read(buf) catch std.debug.panic("Error reading {s}\n", .{entry.basename});
+            buf[bytes_read] = 0;
+            try Parser.parse(buf, &string_table, gpa);
+            //for (tokens.items) |t| {
+            //    std.debug.print("{s} ", .{@tagName(t.type)});
+            //}
+            //try split_tokenize(buf, &string_table);
+        }
+    }
+}
+pub fn mb(comptime bytes: usize) usize {
+    return bytes * 1024 * 1024;
 }
 
 fn split_tokenize(buf: []const u8, string_table: *StringTable) !void {

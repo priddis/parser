@@ -6,7 +6,6 @@ const State = enum {
     start,
     numeric,
     identifier,
-    operator,
 };
 
 const Token = struct {
@@ -16,21 +15,40 @@ const Token = struct {
     length: usize,
 };
 
-pub fn tokenize(text: []const u8, string_table: *StringTable, gpa: std.mem.Allocator) !std.ArrayListUnmanaged(Token) {
+pub const TokenStream = struct {
+    tokens: std.ArrayListUnmanaged(Token),
+    index: usize,
+
+    pub fn next(self: *TokenStream) ?Token {
+        self.index += 1;
+        if (self.index >= self.tokens.items.len) {
+            return null;
+        }
+        return self.tokens.items[self.index];
+    }
+
+    pub fn advance(self: TokenStream) void {
+        self.index += 1;
+    }
+
+    pub fn peek(self: TokenStream) ?Token {
+        if (self.index >= self.tokens.len) {
+            return null;
+        }
+        return self.tokens[self.index];
+    }
+};
+
+pub fn tokenize(text: []const u8, string_table: *StringTable, gpa: std.mem.Allocator) !TokenStream {
     var i: usize = 0;
     var tokens: std.ArrayListUnmanaged(Token) = .empty;
     var next_token: Token = undefined;
     tokenize_loop: switch (State.start) {
         .start => switch (text[i]) {
             //Single char tokens
-            '(', ')', '{', '}', '[', ']', ';', ',', '"', '\'', '=' => |c| {
+            '(', ')', '{', '}', '[', ']', ';', ',', '"', '\'', '.' => |c| {
                 const str = try string_table.put(text[i .. i + 1]);
-                try tokens.append(gpa, .{
-                    .str = str,
-                    .offset = i,
-                    .length = 1,
-                    .type = Constants.get(&.{c}).?,
-                });
+                try tokens.append(gpa, .{ .str = str, .offset = i, .length = 1, .type = Constants.get(&.{c}) orelse std.debug.panic("unkown char {c} {d}", .{ c, c }) });
                 i += 1;
                 continue :tokenize_loop .start;
             },
@@ -46,7 +64,7 @@ pub fn tokenize(text: []const u8, string_table: *StringTable, gpa: std.mem.Alloc
                 i += 1;
                 continue :tokenize_loop .start;
             },
-            '+', '*', '/', '-' => |c| {
+            '+', '*', '/', '-', '=', '\\' => |c| {
                 next_token.type = Constants.get(&.{c}).?;
                 const token_str = text[next_token.offset .. i + 1];
                 const handle = try string_table.put(token_str);
@@ -101,7 +119,6 @@ pub fn tokenize(text: []const u8, string_table: *StringTable, gpa: std.mem.Alloc
                 continue :tokenize_loop .identifier;
             },
             0 => {
-                std.debug.print("|end token {s} \n", .{text[i .. i + 1]});
                 const token_str = text[next_token.offset..i];
                 next_token.type = Constants.get(token_str) orelse .identifier;
                 const handle = try string_table.put(token_str);
@@ -121,7 +138,7 @@ pub fn tokenize(text: []const u8, string_table: *StringTable, gpa: std.mem.Alloc
             },
         },
     }
-    return tokens;
+    return .{ .tokens = tokens, .index = 0 };
 }
 
 const TokenType = enum {
@@ -198,6 +215,7 @@ const TokenType = enum {
     star,
     slash,
     slashslash,
+    backslash,
     percent,
     plus,
     minus,
@@ -282,6 +300,12 @@ const Constants = std.StaticStringMap(TokenType).initComptime(.{
     .{ "super", .super_keyword },
     .{ "while", .while_keyword },
     .{ "var", .var_keyword },
+    .{ "+", .plus },
+    .{ "-", .minus },
+    .{ "/", .slash },
+    .{ "*", .star },
+    .{ "=", .equal },
+    .{ "\\", .backslash },
 });
 test "keyword" {
     const extract = @import("test.zig").extract;
@@ -306,9 +330,7 @@ test "basic addition" {
     const gpa = debug_alloc.allocator();
     var string_table = StringTable.init(gpa);
 
-    const code =
-        \\;int a = 3; long b = 0; return a + b;\x00
-    ;
+    const code = ";int a = 3; long b = 0; return a + b;\x00";
     const expected = [_]TokenType{
         .semicolon,
         .int_keyword,
@@ -319,7 +341,7 @@ test "basic addition" {
         .long_keyword,
         .identifier,
         .equal,
-        .identifier,
+        .number,
         .semicolon,
         .return_keyword,
         .identifier,
